@@ -13,7 +13,9 @@ function FrontOfficeTab({ onGPUsCalculated, onHoursChange }) {
     // Benchmark Parameters
     ttft: '296',
     itl: '53',
-    h200Rate: 35
+    h200Rate: 35,
+    // Hyperscaler comparison
+    hyperscalerRatePerMin: 0.20
   });
 
   const [results, setResults] = useState(null);
@@ -44,7 +46,8 @@ function FrontOfficeTab({ onGPUsCalculated, onHoursChange }) {
       endHour,
       ttft,
       itl,
-      h200Rate
+      h200Rate,
+      hyperscalerRatePerMin
     } = formData;
 
     // Validate business inputs
@@ -65,6 +68,7 @@ function FrontOfficeTab({ onGPUsCalculated, onHoursChange }) {
     const ttftMs = parseFloat(ttft);
     const itlMs = parseFloat(itl);
     const rate = parseFloat(h200Rate);
+    const hyperscalerRate = parseFloat(hyperscalerRatePerMin);
 
     // Operating hours
     const hoursPerDay = end - start;
@@ -78,52 +82,63 @@ function FrontOfficeTab({ onGPUsCalculated, onHoursChange }) {
     const totalMonthlyInputTokens = totalInputTokensPerDay * daysPerMonth;
 
     // Calculate concurrency (peak simultaneous calls)
-    // Calls per hour = callsPerDay / hoursPerDay
-    // If a call lasts avgCallDurationMinutes, concurrent calls = (callsPerHour * avgCallDuration) / 60
     const callsPerHour = calls / hoursPerDay;
     const concurrentCalls = Math.ceil((callsPerHour * callDuration) / 60);
-    
-    // Each concurrent call has multiple turns, but we process one turn at a time per call
-    // Concurrency for GPU = number of concurrent calls (each processing a turn)
     const concurrency = Math.max(1, concurrentCalls);
 
     // Benchmark calculations
     const ttftSec = ttftMs / 1000;
     const itlSec = itlMs / 1000;
-    
-    // E2E latency for generating output tokens for one turn
     const e2eLatency = ttftSec + (itlSec * outputTokens);
 
-    // Throughput per GPU (output tokens per hour)
+    // Throughput per GPU
     const outputTokensPerSecondPerGPU = (outputTokens * concurrency) / e2eLatency;
     const tokensPerHourPerGPU = outputTokensPerSecondPerGPU * 3600;
 
-    // Total hours per month for front office
+    // Total hours per month
     const totalHoursPerMonth = hoursPerDay * daysPerMonth;
 
-    // GPUs needed to handle the load
+    // GPUs needed
     const totalTokensPerMonthPerGPU = tokensPerHourPerGPU * totalHoursPerMonth;
     const calculatedGPUs = Math.ceil(totalMonthlyOutputTokens / totalTokensPerMonthPerGPU);
-    const gpusNeeded = Math.max(4, calculatedGPUs); // Minimum 4 GPUs
+    const gpusNeeded = Math.max(4, calculatedGPUs);
 
-    // Time to generate all tokens (in hours)
+    // Time to generate all tokens
     const numberOfBatches = totalMonthlyOutputTokens / (outputTokens * concurrency);
     const timeTakenSeconds = numberOfBatches * e2eLatency;
     const timeTakenHours = timeTakenSeconds / 3600;
 
-    // Throughput in million tokens per hour per GPU
+    // Throughput
     const throughput = (outputTokens * concurrency * 3600) / (e2eLatency * 1000000);
 
-    // Total cost
-    const totalCost = gpusNeeded * timeTakenHours * rate;
+    // NVIDIA H200 Cost
+    const nvidiaMonthly = gpusNeeded * timeTakenHours * rate;
+    const nvidiaYearly = nvidiaMonthly * 12;
+    const nvidia3Year = nvidiaYearly * 3;
+    const nvidia5Year = nvidiaYearly * 5;
 
-    // Response time per turn (for user experience)
+    // Hyperscaler Cost (Voice Bot + Agent Assist + Insights @ $0.20/min)
+    const totalMinutesPerDay = calls * callDuration;
+    const totalMinutesPerMonth = totalMinutesPerDay * daysPerMonth;
+    const hyperscalerMonthly = totalMinutesPerMonth * hyperscalerRate;
+    const hyperscalerYearly = hyperscalerMonthly * 12;
+    const hyperscaler3Year = hyperscalerYearly * 3;
+    const hyperscaler5Year = hyperscalerYearly * 5;
+
+    // Savings
+    const savingsMonthly = hyperscalerMonthly - nvidiaMonthly;
+    const savingsYearly = hyperscalerYearly - nvidiaYearly;
+    const savings3Year = hyperscaler3Year - nvidia3Year;
+    const savings5Year = hyperscaler5Year - nvidia5Year;
+    const savingsPercentage = ((hyperscalerMonthly - nvidiaMonthly) / hyperscalerMonthly) * 100;
+
+    // Response time
     const responseTimeMs = e2eLatency * 1000;
 
     const calculationResults = {
       gpusNeeded,
       timeTakenHours,
-      totalCost,
+      totalCost: nvidiaMonthly,
       e2eLatency,
       hoursPerDay,
       throughput,
@@ -133,11 +148,35 @@ function FrontOfficeTab({ onGPUsCalculated, onHoursChange }) {
       concurrentCalls,
       concurrency,
       responseTimeMs,
-      callsPerHour
+      callsPerHour,
+      totalMinutesPerMonth,
+      // Cost comparison
+      nvidiaMonthly,
+      nvidiaYearly,
+      nvidia3Year,
+      nvidia5Year,
+      hyperscalerMonthly,
+      hyperscalerYearly,
+      hyperscaler3Year,
+      hyperscaler5Year,
+      savingsMonthly,
+      savingsYearly,
+      savings3Year,
+      savings5Year,
+      savingsPercentage
     };
 
     setResults(calculationResults);
     onGPUsCalculated(gpusNeeded);
+  };
+
+  const formatCurrency = (value) => {
+    if (value >= 1000000) {
+      return `$${(value / 1000000).toFixed(2)}M`;
+    } else if (value >= 1000) {
+      return `$${(value / 1000).toFixed(1)}K`;
+    }
+    return `$${value.toFixed(2)}`;
   };
 
   return (
@@ -335,16 +374,33 @@ function FrontOfficeTab({ onGPUsCalculated, onHoursChange }) {
             </div>
           </div>
 
-          <div className="form-group">
-            <label>H200 Rate ($ per hour)</label>
-            <input
-              type="number"
-              name="h200Rate"
-              value={formData.h200Rate}
-              onChange={handleInputChange}
-              placeholder="e.g., 35"
-              step="0.01"
-            />
+          <div className="form-row">
+            <div className="form-group">
+              <label>H200 Rate ($ per hour)</label>
+              <input
+                type="number"
+                name="h200Rate"
+                value={formData.h200Rate}
+                onChange={handleInputChange}
+                placeholder="e.g., 35"
+                step="0.01"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Hyperscaler Rate ($ per minute)</label>
+              <input
+                type="number"
+                name="hyperscalerRatePerMin"
+                value={formData.hyperscalerRatePerMin}
+                onChange={handleInputChange}
+                placeholder="e.g., 0.20"
+                step="0.01"
+              />
+              <small style={{ color: '#a0a0a0', display: 'block', marginTop: '0.5rem' }}>
+                Voice Bot + Agent Assist + Insights
+              </small>
+            </div>
           </div>
         </div>
 
@@ -354,67 +410,194 @@ function FrontOfficeTab({ onGPUsCalculated, onHoursChange }) {
       </div>
 
       {results && (
-        <div className="results-section">
-          <h3>Calculation Results</h3>
-          
-          <div className="key-metrics-grid">
-            <div className="key-metric-card">
-              <h4>GPUs Needed</h4>
-              <div className="key-value">{results.gpusNeeded}</div>
-              <div className="unit">GPUs</div>
+        <>
+          <div className="results-section">
+            <h3>Calculation Results</h3>
+            
+            <div className="key-metrics-grid">
+              <div className="key-metric-card">
+                <h4>GPUs Needed</h4>
+                <div className="key-value">{results.gpusNeeded}</div>
+                <div className="unit">GPUs</div>
+              </div>
+
+              <div className="key-metric-card">
+                <h4>NVIDIA Monthly Cost</h4>
+                <div className="key-value">{formatCurrency(results.nvidiaMonthly)}</div>
+                <div className="unit">per month</div>
+              </div>
             </div>
 
-            <div className="key-metric-card">
-              <h4>Total Cost</h4>
-              <div className="key-value">${results.totalCost.toFixed(2)}</div>
-              <div className="unit">Monthly</div>
-            </div>
-          </div>
-
-          <div className="highlight-box" style={{ marginTop: '2rem', marginBottom: '1.5rem' }}>
-            <p><strong>Peak Concurrent Calls:</strong> {results.concurrentCalls} simultaneous calls</p>
-            <p><strong>Response Time per Turn:</strong> {results.responseTimeMs.toFixed(0)} ms ({results.e2eLatency.toFixed(2)} seconds)</p>
-            <p><strong>Calls per Hour:</strong> {results.callsPerHour.toFixed(0)} calls/hour</p>
-          </div>
-
-          <div className="result-grid">
-            <div className="result-card">
-              <h4>Total Turns per Day</h4>
-              <div className="value">{results.totalTurnsPerDay.toLocaleString()}</div>
-              <div className="unit">turns</div>
+            <div className="highlight-box" style={{ marginTop: '2rem', marginBottom: '1.5rem' }}>
+              <p><strong>Peak Concurrent Calls:</strong> {results.concurrentCalls} simultaneous calls</p>
+              <p><strong>Response Time per Turn:</strong> {results.responseTimeMs.toFixed(0)} ms ({results.e2eLatency.toFixed(2)} seconds)</p>
+              <p><strong>Total Minutes per Month:</strong> {results.totalMinutesPerMonth.toLocaleString()} minutes</p>
             </div>
 
-            <div className="result-card">
-              <h4>Monthly Output Tokens</h4>
-              <div className="value">{(results.totalMonthlyOutputTokens / 1000000).toFixed(2)}M</div>
-              <div className="unit">tokens</div>
-            </div>
+            <div className="result-grid">
+              <div className="result-card">
+                <h4>Total Turns per Day</h4>
+                <div className="value">{results.totalTurnsPerDay.toLocaleString()}</div>
+                <div className="unit">turns</div>
+              </div>
 
-            <div className="result-card">
-              <h4>Monthly Input Tokens</h4>
-              <div className="value">{(results.totalMonthlyInputTokens / 1000000).toFixed(2)}M</div>
-              <div className="unit">tokens</div>
-            </div>
+              <div className="result-card">
+                <h4>Monthly Output Tokens</h4>
+                <div className="value">{(results.totalMonthlyOutputTokens / 1000000).toFixed(2)}M</div>
+                <div className="unit">tokens</div>
+              </div>
 
-            <div className="result-card">
-              <h4>Operating Hours</h4>
-              <div className="value">{results.hoursPerDay}</div>
-              <div className="unit">Hours per Day</div>
-            </div>
+              <div className="result-card">
+                <h4>Operating Hours</h4>
+                <div className="value">{results.hoursPerDay}</div>
+                <div className="unit">Hours per Day</div>
+              </div>
 
-            <div className="result-card">
-              <h4>Throughput</h4>
-              <div className="value">{results.throughput.toFixed(2)}</div>
-              <div className="unit">Million Tokens/Hour/GPU</div>
-            </div>
-
-            <div className="result-card">
-              <h4>GPU Concurrency</h4>
-              <div className="value">{results.concurrency}</div>
-              <div className="unit">Requests/GPU</div>
+              <div className="result-card">
+                <h4>Throughput</h4>
+                <div className="value">{results.throughput.toFixed(2)}</div>
+                <div className="unit">Million Tokens/Hour/GPU</div>
+              </div>
             </div>
           </div>
-        </div>
+
+          {/* Cost Comparison Section */}
+          <div className="results-section" style={{ marginTop: '2rem' }}>
+            <h3>💰 Cost Comparison: NVIDIA vs Hyperscalers</h3>
+            
+            <div style={{ 
+              background: 'linear-gradient(135deg, rgba(118, 185, 0, 0.2) 0%, rgba(118, 185, 0, 0.05) 100%)',
+              border: '2px solid #76b900',
+              borderRadius: '12px',
+              padding: '2rem',
+              marginBottom: '2rem',
+              textAlign: 'center'
+            }}>
+              <p style={{ fontSize: '1.2rem', color: '#a0a0a0', marginBottom: '0.5rem' }}>
+                Total Savings with NVIDIA H200
+              </p>
+              <div style={{ fontSize: '4rem', fontWeight: 'bold', color: '#76b900', textShadow: '0 0 30px rgba(118, 185, 0, 0.5)' }}>
+                {results.savingsPercentage.toFixed(0)}%
+              </div>
+              <p style={{ fontSize: '1.1rem', color: '#e0e0e0' }}>
+                Lower cost compared to Hyperscaler solutions
+              </p>
+            </div>
+
+            <p style={{ color: '#a0a0a0', marginBottom: '1.5rem', textAlign: 'center' }}>
+              <strong>Hyperscaler pricing:</strong> Voice Bot + Agent Assist + Insights @ ${formData.hyperscalerRatePerMin}/minute
+            </p>
+
+            {/* Comparison Table */}
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ 
+                width: '100%', 
+                borderCollapse: 'collapse',
+                background: 'rgba(0, 0, 0, 0.3)',
+                borderRadius: '8px',
+                overflow: 'hidden'
+              }}>
+                <thead>
+                  <tr style={{ background: 'rgba(118, 185, 0, 0.2)' }}>
+                    <th style={{ padding: '1rem', textAlign: 'left', color: '#76b900', borderBottom: '2px solid #333' }}>Time Period</th>
+                    <th style={{ padding: '1rem', textAlign: 'right', color: '#ff6b6b', borderBottom: '2px solid #333' }}>Hyperscaler Cost</th>
+                    <th style={{ padding: '1rem', textAlign: 'right', color: '#76b900', borderBottom: '2px solid #333' }}>NVIDIA H200 Cost</th>
+                    <th style={{ padding: '1rem', textAlign: 'right', color: '#4ecdc4', borderBottom: '2px solid #333' }}>Your Savings</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style={{ borderBottom: '1px solid #333' }}>
+                    <td style={{ padding: '1rem', color: '#e0e0e0' }}>Monthly</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#ff6b6b', fontWeight: 'bold' }}>{formatCurrency(results.hyperscalerMonthly)}</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#76b900', fontWeight: 'bold' }}>{formatCurrency(results.nvidiaMonthly)}</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#4ecdc4', fontWeight: 'bold' }}>{formatCurrency(results.savingsMonthly)}</td>
+                  </tr>
+                  <tr style={{ borderBottom: '1px solid #333' }}>
+                    <td style={{ padding: '1rem', color: '#e0e0e0' }}>Year 1</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#ff6b6b', fontWeight: 'bold' }}>{formatCurrency(results.hyperscalerYearly)}</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#76b900', fontWeight: 'bold' }}>{formatCurrency(results.nvidiaYearly)}</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#4ecdc4', fontWeight: 'bold' }}>{formatCurrency(results.savingsYearly)}</td>
+                  </tr>
+                  <tr style={{ borderBottom: '1px solid #333', background: 'rgba(118, 185, 0, 0.05)' }}>
+                    <td style={{ padding: '1rem', color: '#e0e0e0', fontWeight: 'bold' }}>3 Years</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#ff6b6b', fontWeight: 'bold', fontSize: '1.1rem' }}>{formatCurrency(results.hyperscaler3Year)}</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#76b900', fontWeight: 'bold', fontSize: '1.1rem' }}>{formatCurrency(results.nvidia3Year)}</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#4ecdc4', fontWeight: 'bold', fontSize: '1.1rem' }}>{formatCurrency(results.savings3Year)}</td>
+                  </tr>
+                  <tr style={{ background: 'rgba(118, 185, 0, 0.1)' }}>
+                    <td style={{ padding: '1rem', color: '#76b900', fontWeight: 'bold', fontSize: '1.1rem' }}>5 Years</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#ff6b6b', fontWeight: 'bold', fontSize: '1.2rem' }}>{formatCurrency(results.hyperscaler5Year)}</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#76b900', fontWeight: 'bold', fontSize: '1.2rem' }}>{formatCurrency(results.nvidia5Year)}</td>
+                    <td style={{ padding: '1rem', textAlign: 'right', color: '#4ecdc4', fontWeight: 'bold', fontSize: '1.2rem' }}>{formatCurrency(results.savings5Year)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Visual Bar Comparison */}
+            <div style={{ marginTop: '2rem' }}>
+              <h4 style={{ color: '#76b900', marginBottom: '1rem' }}>5-Year Cost Visualization</h4>
+              
+              <div style={{ marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                  <span style={{ color: '#ff6b6b' }}>Hyperscaler</span>
+                  <span style={{ color: '#ff6b6b', fontWeight: 'bold' }}>{formatCurrency(results.hyperscaler5Year)}</span>
+                </div>
+                <div style={{ 
+                  width: '100%', 
+                  height: '30px', 
+                  background: 'rgba(255, 107, 107, 0.3)',
+                  borderRadius: '4px',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{ 
+                    width: '100%', 
+                    height: '100%', 
+                    background: 'linear-gradient(90deg, #ff6b6b 0%, #ff8e8e 100%)',
+                    borderRadius: '4px'
+                  }}></div>
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                  <span style={{ color: '#76b900' }}>NVIDIA H200</span>
+                  <span style={{ color: '#76b900', fontWeight: 'bold' }}>{formatCurrency(results.nvidia5Year)}</span>
+                </div>
+                <div style={{ 
+                  width: '100%', 
+                  height: '30px', 
+                  background: 'rgba(118, 185, 0, 0.2)',
+                  borderRadius: '4px',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{ 
+                    width: `${(results.nvidia5Year / results.hyperscaler5Year) * 100}%`, 
+                    height: '100%', 
+                    background: 'linear-gradient(90deg, #76b900 0%, #9ed63a 100%)',
+                    borderRadius: '4px',
+                    transition: 'width 0.5s ease'
+                  }}></div>
+                </div>
+              </div>
+
+              <div style={{ 
+                background: 'linear-gradient(135deg, rgba(78, 205, 196, 0.2) 0%, rgba(78, 205, 196, 0.05) 100%)',
+                border: '2px solid #4ecdc4',
+                borderRadius: '8px',
+                padding: '1.5rem',
+                textAlign: 'center'
+              }}>
+                <p style={{ color: '#4ecdc4', fontSize: '1.1rem', marginBottom: '0.5rem' }}>
+                  🎉 Total 5-Year Savings
+                </p>
+                <div style={{ fontSize: '2.5rem', fontWeight: 'bold', color: '#4ecdc4' }}>
+                  {formatCurrency(results.savings5Year)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
